@@ -111,7 +111,8 @@ let state = {
   program: defaultProgram(),
   logs: {},          // { 'YYYY-MM-DD': { dayKey, name, exercises:[...снимок], entries:{exId:[{w,r,done}]}, completed } }
   body: {},          // { 'YYYY-MM-DD': вес тела, кг }
-  settings: { restSec: 90 }
+  water: {},         // { 'YYYY-MM-DD': выпито, мл }
+  settings: { restSec: 90, waterGoal: 2000 }
 };
 const ui = {
   view: 'calendar',
@@ -308,6 +309,85 @@ function renderCalendar() {
       <div class="stat-tile green"><b>${monthLogs.length}</b><span>${plural(monthLogs.length, 'тренировка', 'тренировки', 'тренировок')}</span></div>
       <div class="stat-tile"><b>${monthSets}</b><span>${plural(monthSets, 'подход', 'подхода', 'подходов')}</span></div>
       <div class="stat-tile"><b>${fmtTon(monthTon)}</b><span>тоннаж</span></div>
+    </div>
+    ${renderWaterCard()}`;
+}
+
+/* ===== Вода ===== */
+function fmtMl(ml) {
+  return ml >= 1000 ? (ml / 1000).toFixed(ml % 1000 ? 2 : 0).replace(/\.?0+$/, '').replace('.', ',') + ' л' : ml + ' мл';
+}
+function waterToday() { return (state.water || {})[todayISO()] || 0; }
+
+function waterRing(pct) {
+  const r = 34, c = 2 * Math.PI * r;
+  const off = c * (1 - Math.min(1, pct));
+  return `<svg viewBox="0 0 84 84" class="water-ring" role="img" aria-label="Выпито ${Math.round(pct * 100)}% дневной нормы воды">
+    <circle cx="42" cy="42" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="8"/>
+    <circle cx="42" cy="42" r="${r}" fill="none" stroke="var(--water)" stroke-width="8" stroke-linecap="round"
+      stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" transform="rotate(-90 42 42)"/>
+    <text x="42" y="48" text-anchor="middle" class="water-pct">${Math.round(pct * 100)}%</text>
+  </svg>`;
+}
+
+function renderWaterCard() {
+  const ml = waterToday();
+  const goal = state.settings.waterGoal || 2000;
+  return `
+    <div class="card water-card">
+      ${waterRing(ml / goal)}
+      <div class="water-info">
+        <h3>Вода сегодня</h3>
+        <p class="water-amt"><b>${fmtMl(ml)}</b> из ${fmtMl(goal)}${ml >= goal ? ' · <span style="color:var(--water)">норма выполнена</span>' : ''}</p>
+        <div class="water-btns">
+          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="250">+250 мл</button>
+          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="500">+500 мл</button>
+          <button class="btn btn-ghost btn-sm" data-action="water-add" data-ml="-250" ${ml ? '' : 'disabled'} aria-label="Убрать 250 мл">−250</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function svgWaterChart(days, goal) {
+  const W = 480, H = 170, P = { t: 20, r: 8, b: 24, l: 8 };
+  const max = Math.max(goal * 1.15, ...days.map(d => d.value), 1);
+  const bw = (W - P.l - P.r) / days.length;
+  const gy = H - P.b - (H - P.t - P.b) * goal / max;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Вода за последние ${days.length} дней">
+    <line x1="${P.l}" y1="${gy.toFixed(1)}" x2="${W - P.r}" y2="${gy.toFixed(1)}" stroke="#8B95A5" stroke-width="1" stroke-dasharray="4 4" opacity=".6"/>
+    <text class="axis-label" x="${P.l}" y="${(gy - 5).toFixed(1)}">норма ${fmtMl(goal)}</text>
+    ${days.map((d, i) => {
+      const h = Math.max(2, (H - P.t - P.b) * d.value / max);
+      const bx = P.l + i * bw + bw * 0.2;
+      return `<rect x="${bx.toFixed(1)}" y="${(H - P.b - h).toFixed(1)}" width="${(bw * 0.6).toFixed(1)}" height="${h.toFixed(1)}" rx="4"
+        fill="${d.value >= goal ? '#38BDF8' : '#3A4453'}"/>
+      ${i % 2 === (days.length - 1) % 2 ? `<text class="axis-label" x="${(bx + bw * 0.3).toFixed(1)}" y="${H - 7}" text-anchor="middle">${d.label}</text>` : ''}`;
+    }).join('')}
+  </svg>`;
+}
+
+function renderWaterStats() {
+  const goal = state.settings.waterGoal || 2000;
+  const days = [];
+  const cur = new Date();
+  cur.setDate(cur.getDate() - 13);
+  for (let i = 0; i < 14; i++) {
+    const dStr = iso(cur);
+    days.push({ label: `${pad(cur.getDate())}.${pad(cur.getMonth() + 1)}`, value: (state.water || {})[dStr] || 0 });
+    cur.setDate(cur.getDate() + 1);
+  }
+  const week = days.slice(-7);
+  const avg = Math.round(week.reduce((s, d) => s + d.value, 0) / 7);
+  const met = days.filter(d => d.value >= goal).length;
+  return `
+    <div class="card">
+      <h3>Вода</h3>
+      <div class="stat-row" style="margin:10px 0 0">
+        <div class="stat-tile blue"><b>${fmtMl(waterToday())}</b><span>сегодня</span></div>
+        <div class="stat-tile blue"><b>${fmtMl(avg)}</b><span>в среднем за 7 дней</span></div>
+        <div class="stat-tile blue"><b>${met}/14</b><span>${plural(met, 'норма', 'нормы', 'норм')} за 2 недели</span></div>
+      </div>
+      <div class="chart-wrap">${svgWaterChart(days, goal)}</div>
     </div>`;
 }
 
@@ -614,6 +694,8 @@ function renderStats() {
 
     ${renderBodyCard()}
 
+    ${renderWaterStats()}
+
     <div class="card">
       <h3 style="margin-bottom:10px">Рабочий вес</h3>
       <select class="select" data-action="stats-ex" aria-label="Выбор упражнения">
@@ -692,6 +774,10 @@ function renderPlan() {
       <div class="settings-row">
         <label for="rest-sec">Отдых между подходами<span class="hint">Таймер запускается после отметки подхода</span></label>
         <input id="rest-sec" class="num-input" type="number" min="10" max="600" step="5" value="${state.settings.restSec}" data-pfield="restsec" inputmode="numeric">
+      </div>
+      <div class="settings-row">
+        <label for="water-goal">Норма воды в день<span class="hint">В миллилитрах, шаг 100</span></label>
+        <input id="water-goal" class="num-input" type="number" min="500" max="6000" step="100" value="${state.settings.waterGoal || 2000}" data-pfield="watergoal" inputmode="numeric">
       </div>
       <div class="settings-row">
         <label>Данные<span class="hint">Резервная копия в JSON</span></label>
@@ -854,6 +940,20 @@ document.addEventListener('click', e => {
     day.exercises.splice(+btn.dataset.idx, 1);
     save(); render();
   }
+  else if (a === 'water-add') {
+    if (!state.water) state.water = {};
+    const goal = state.settings.waterGoal || 2000;
+    const t = todayISO();
+    const before = state.water[t] || 0;
+    state.water[t] = Math.max(0, Math.min(10000, before + +btn.dataset.ml));
+    save();
+    haptic();
+    if (before < goal && state.water[t] >= goal) {
+      toast('Дневная норма воды выполнена!', 'green');
+      haptic('success');
+    }
+    render();
+  }
   else if (a === 'log-weight') {
     const inp = $('#bw-input');
     const v = parseFloat(String(inp.value).replace(',', '.'));
@@ -899,6 +999,11 @@ document.addEventListener('input', e => {
     if (f === 'restsec') {
       const v = Math.max(10, Math.min(600, +el.value || 90));
       state.settings.restSec = v;
+      save();
+      return;
+    }
+    if (f === 'watergoal') {
+      state.settings.waterGoal = Math.max(500, Math.min(6000, +el.value || 2000));
       save();
       return;
     }
