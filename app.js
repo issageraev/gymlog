@@ -314,6 +314,44 @@ function renderCalendar() {
 }
 
 /* ===== Вода ===== */
+/* Синхронизация с ботом: общая база на gymlog-bot.vercel.app (только внутри Telegram) */
+const WATER_API = 'https://gymlog-bot.vercel.app/api/water';
+let waterSyncAt = 0;
+
+function tgAuth() { return tg && tg.initData ? 'tma ' + tg.initData : null; }
+
+async function waterSync(force) {
+  const auth = tgAuth();
+  if (!auth) return;
+  if (!force && Date.now() - waterSyncAt < 15000) return;
+  waterSyncAt = Date.now();
+  try {
+    const r = await fetch(WATER_API, { headers: { Authorization: auth } });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!state.water) state.water = {};
+    let changed = false;
+    for (const [date, v] of Object.entries(d.water || {})) {
+      const merged = Math.max(state.water[date] || 0, +v || 0);
+      if (merged !== (state.water[date] || 0)) { state.water[date] = merged; changed = true; }
+    }
+    const t = todayISO();
+    if ((state.water[t] || 0) > (+(d.water || {})[t] || 0)) waterPush();
+    if (changed) { save(); render(); }
+  } catch (e) {}
+}
+
+function waterPush() {
+  const auth = tgAuth();
+  if (!auth) return;
+  const t = todayISO();
+  fetch(WATER_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: auth },
+    body: JSON.stringify({ date: t, total: (state.water || {})[t] || 0, goal: state.settings.waterGoal || 2000 })
+  }).catch(() => {});
+}
+
 function fmtMl(ml) {
   return ml >= 1000 ? (ml / 1000).toFixed(ml % 1000 ? 2 : 0).replace(/\.?0+$/, '').replace('.', ',') + ' л' : ml + ' мл';
 }
@@ -947,6 +985,7 @@ document.addEventListener('click', e => {
     const before = state.water[t] || 0;
     state.water[t] = Math.max(0, Math.min(10000, before + +btn.dataset.ml));
     save();
+    waterPush();
     haptic();
     if (before < goal && state.water[t] >= goal) {
       toast('Дневная норма воды выполнена!', 'green');
@@ -1005,6 +1044,7 @@ document.addEventListener('input', e => {
     if (f === 'watergoal') {
       state.settings.waterGoal = Math.max(500, Math.min(6000, +el.value || 2000));
       save();
+      waterPush();
       return;
     }
     const day = state.program.days[el.dataset.day];
@@ -1053,3 +1093,6 @@ render();
 if (!hadLocal && tg) {
   cloudLoad(ok => { if (ok) { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} render(); } });
 }
+waterSync(true);
+window.addEventListener('focus', () => waterSync());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) waterSync(); });
