@@ -87,6 +87,8 @@ const EX_LIBRARY = [
 /* ---------- Данные по умолчанию ---------- */
 function defaultProgram() {
   return {
+    mode: 'single',   // 'single' | 'ab' — чередование недель A/B
+    anchor: null,     // понедельник недели, считающейся неделей A
     days: {
       '1': {
         name: 'Грудь · Трицепс',
@@ -133,7 +135,8 @@ const ui = {
   calYear: new Date().getFullYear(),
   calMonth: new Date().getMonth(),
   weekDate: todayISO(),
-  statsEx: null
+  statsEx: null,
+  planWeek: 'A'
 };
 
 const STORE_KEY = 'gymlog.v1';
@@ -148,10 +151,32 @@ function load() {
     if (raw) {
       const data = JSON.parse(raw);
       state = { ...state, ...data, settings: { ...state.settings, ...(data.settings || {}) } };
+      if (!state.program.mode) state.program.mode = 'single'; // миграция старых данных
       return true;
     }
   } catch (e) {}
   return false;
+}
+
+/* ---------- Недели A/B ---------- */
+function weekType(dateStr) {
+  if (state.program.mode !== 'ab') return 'A';
+  const a = mondayOf(parseISO(state.program.anchor || todayISO()));
+  const m = mondayOf(parseISO(dateStr));
+  const diff = Math.round((m - a) / (7 * 86400000));
+  return ((diff % 2) + 2) % 2 === 0 ? 'A' : 'B';
+}
+/* План, действующий на конкретную дату */
+function daysFor(dateStr) {
+  return weekType(dateStr) === 'B' ? (state.program.daysB || {}) : state.program.days;
+}
+/* План, редактируемый сейчас на экране «План» */
+function planDays() {
+  if (state.program.mode === 'ab' && ui.planWeek === 'B') {
+    if (!state.program.daysB) state.program.daysB = {};
+    return state.program.daysB;
+  }
+  return state.program.days;
 }
 
 /* Зеркало в Telegram CloudStorage (кусками по 3800 символов) */
@@ -198,7 +223,7 @@ function cloudLoad(cb) {
 function getLog(dateStr) { return state.logs[dateStr] || null; }
 
 function createLog(dateStr, dayKey) {
-  const tpl = state.program.days[dayKey];
+  const tpl = daysFor(dateStr)[dayKey];
   if (!tpl) return null;
   const exercises = tpl.exercises.map(e => ({ ...e }));
   const entries = {};
@@ -361,6 +386,15 @@ function applyOnboard() {
       : JSON.parse(JSON.stringify(tplArr[i % tplArr.length]));
     if (!state.program.days[k] || fresh) state.program.days[k] = make();
   });
+  // в режиме A/B зеркалим добавления и удаления дней в неделю B
+  if (state.program.mode === 'ab' && state.program.daysB) {
+    for (const k of Object.keys(state.program.daysB)) {
+      if (!ui.obDays.has(k)) delete state.program.daysB[k];
+    }
+    days.forEach(k => {
+      if (!state.program.daysB[k]) state.program.daysB[k] = JSON.parse(JSON.stringify(state.program.days[k]));
+    });
+  }
 }
 
 /* ===== Календарь ===== */
@@ -372,7 +406,7 @@ function dayStatus(dateStr) {
     return sets > 0 ? 'partial' : 'planned';
   }
   const wd = String(dow(parseISO(dateStr)));
-  if (state.program.days[wd]) return 'planned';
+  if (daysFor(dateStr)[wd]) return 'planned';
   return 'empty';
 }
 
@@ -569,7 +603,7 @@ function renderWeek() {
 
   view.innerHTML = `
     <h1 class="screen-title">Тренировка</h1>
-    <p class="screen-sub">${sel === today ? 'Сегодня — ' : ''}${fmtHuman(sel)}</p>
+    <p class="screen-sub">${sel === today ? 'Сегодня — ' : ''}${fmtHuman(sel)}${state.program.mode === 'ab' ? ` · <span style="color:var(--primary);font-weight:600">неделя ${weekType(sel)}</span>` : ''}</p>
     <div class="week-strip">${strip}</div>
     <div id="workout-area">${renderWorkoutArea(sel)}</div>`;
 }
@@ -577,7 +611,7 @@ function renderWeek() {
 function renderWorkoutArea(dateStr) {
   const log = getLog(dateStr);
   const wd = String(dow(parseISO(dateStr)));
-  const planDay = state.program.days[wd];
+  const planDay = daysFor(dateStr)[wd];
 
   if (!log) {
     if (planDay) {
@@ -596,15 +630,15 @@ function renderWorkoutArea(dateStr) {
           ${hasEx
             ? `<button class="btn btn-primary btn-block" data-action="start-workout" data-date="${dateStr}" data-daykey="${wd}" style="margin-top:10px">Начать тренировку</button>`
             : `<p class="ex-meta">Добавь упражнения — и здесь появится кнопка старта.</p>
-               <button class="btn btn-primary btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:6px">Заполнить план</button>`}
-          ${hasEx ? `<button class="btn btn-outline btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:8px">
+               <button class="btn btn-primary btn-block" data-action="edit-plan" data-day="${wd}" data-week="${weekType(dateStr)}" style="margin-top:6px">Заполнить план</button>`}
+          ${hasEx ? `<button class="btn btn-outline btn-block" data-action="edit-plan" data-day="${wd}" data-week="${weekType(dateStr)}" style="margin-top:8px">
             <svg class="icon" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
             Изменить план этой тренировки
           </button>` : ''}
         </div>`;
     }
     // День отдыха
-    const options = Object.entries(state.program.days)
+    const options = Object.entries(daysFor(dateStr))
       .map(([k, d]) => `<button class="btn btn-outline btn-block" data-action="start-workout" data-date="${dateStr}" data-daykey="${k}">${esc(d.name)}</button>`)
       .join('');
     return `
@@ -615,7 +649,7 @@ function renderWorkoutArea(dateStr) {
           <p style="font-size:14px">Восстановление — тоже часть прогресса.</p>
         </div>
         ${options ? `<p class="ex-meta" style="text-align:center">Или внеплановая тренировка:</p><div class="rest-choice">${options}</div>` : ''}
-        <button class="btn btn-ghost btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:10px">Настроить план недели</button>
+        <button class="btn btn-ghost btn-block" data-action="edit-plan" data-day="${wd}" data-week="${weekType(dateStr)}" style="margin-top:10px">Настроить план недели</button>
       </div>`;
   }
 
@@ -677,6 +711,7 @@ function hintLast(exId, dateStr) {
 function allExercises() {
   const map = new Map();
   Object.values(state.program.days).forEach(d => d.exercises.forEach(e => map.set(e.id, e.name)));
+  Object.values(state.program.daysB || {}).forEach(d => d.exercises.forEach(e => { if (!map.has(e.id)) map.set(e.id, e.name); }));
   Object.values(state.logs).forEach(l => l.exercises.forEach(e => { if (!map.has(e.id)) map.set(e.id, e.name); }));
   return map;
 }
@@ -889,9 +924,31 @@ function renderStats() {
 
 /* ===== План ===== */
 function renderPlan() {
+  const ab = state.program.mode === 'ab';
+  const curType = weekType(todayISO());
+  const edited = planDays();
+  const abCard = `
+    <div class="card">
+      <div class="plan-day-head">
+        <h3>Чередование недель A/B</h3>
+        <label class="switch" aria-label="Чередование недель A и B">
+          <input type="checkbox" ${ab ? 'checked' : ''} data-action="ab-toggle"><i></i>
+        </label>
+      </div>
+      ${ab ? `
+        <div class="seg" role="tablist" style="margin:10px 0">
+          <button class="${ui.planWeek !== 'B' ? 'on' : ''}" data-action="plan-week" data-week="A" role="tab" aria-selected="${ui.planWeek !== 'B'}">Неделя A</button>
+          <button class="${ui.planWeek === 'B' ? 'on' : ''}" data-action="plan-week" data-week="B" role="tab" aria-selected="${ui.planWeek === 'B'}">Неделя B</button>
+        </div>
+        <div class="settings-row" style="border:none;padding-top:0">
+          <label>Сейчас идёт неделя ${curType}<span class="hint">Недели меняются автоматически по календарю</span></label>
+          <button class="btn btn-outline btn-sm" data-action="ab-swap">Сейчас ${curType === 'A' ? 'B' : 'A'}</button>
+        </div>` : `<p class="ex-meta">Включи, чтобы вести две чередующиеся программы: неделя A, затем B, и так по кругу.</p>`}
+    </div>`;
+
   const days = DAYS_FULL.map((full, i) => {
     const key = String(i + 1);
-    const day = state.program.days[key];
+    const day = edited[key];
     if (!day) {
       return `<div class="card plan-day" id="plan-day-${key}">
         <div class="plan-day-head">
@@ -930,8 +987,9 @@ function renderPlan() {
 
   view.innerHTML = `
     <h1 class="screen-title">План</h1>
-    <p class="screen-sub">Недельная программа — редактируй под себя</p>
+    <p class="screen-sub">${ab ? `Редактируешь неделю ${ui.planWeek === 'B' ? 'B' : 'A'}` : 'Недельная программа — редактируй под себя'}</p>
     <datalist id="ex-library">${EX_LIBRARY.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+    ${abCard}
     ${days}
     <div class="card">
       <h3 style="margin-bottom:6px">Настройки</h3>
@@ -1113,6 +1171,7 @@ document.addEventListener('click', e => {
   }
   else if (a === 'edit-plan') {
     ui.view = 'plan';
+    if (btn.dataset.week) ui.planWeek = btn.dataset.week;
     render(true);
     const card = document.getElementById('plan-day-' + (btn.dataset.day || '1'));
     if (card) {
@@ -1121,27 +1180,53 @@ document.addEventListener('click', e => {
       setTimeout(() => card.classList.remove('focus'), 2500);
     }
   }
+  else if (a === 'ab-toggle') {
+    if (state.program.mode === 'ab') {
+      ask('Выключить чередование? План недели B будет удалён (история останется).', () => {
+        state.program.mode = 'single';
+        delete state.program.daysB;
+        ui.planWeek = 'A';
+        save(); render();
+      }, () => render());
+    } else {
+      state.program.mode = 'ab';
+      state.program.anchor = iso(mondayOf(new Date()));
+      state.program.daysB = JSON.parse(JSON.stringify(state.program.days));
+      ui.planWeek = 'B';
+      save(); render();
+      toast('Неделя B создана как копия недели A — измени её под себя');
+    }
+  }
+  else if (a === 'plan-week') { ui.planWeek = btn.dataset.week; render(); }
+  else if (a === 'ab-swap') {
+    const anchor = parseISO(state.program.anchor || todayISO());
+    anchor.setDate(anchor.getDate() - 7);
+    state.program.anchor = iso(mondayOf(anchor));
+    save(); render();
+    toast(`Теперь текущая неделя — ${weekType(todayISO())}`);
+  }
   else if (a === 'plan-toggle') {
     const key = btn.dataset.day;
-    if (state.program.days[key]) {
-      const doOff = () => { delete state.program.days[key]; save(); render(); };
-      if (state.program.days[key].exercises.length) {
+    const days = planDays();
+    if (days[key]) {
+      const doOff = () => { delete days[key]; save(); render(); };
+      if (days[key].exercises.length) {
         ask('Убрать тренировку в этот день? Упражнения из плана удалятся, история останется.', doOff, () => render());
       } else doOff();
     } else {
-      state.program.days[key] = { name: 'Тренировка', exercises: [] };
+      days[key] = { name: 'Тренировка', exercises: [] };
       save(); render();
     }
   }
   else if (a === 'plan-add-ex') {
-    const day = state.program.days[btn.dataset.day];
+    const day = planDays()[btn.dataset.day];
     day.exercises.push({ id: 'ex' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: '', sets: 3, reps: 10 });
     save(); render();
     const inputs = view.querySelectorAll(`[data-pfield="name"][data-day="${btn.dataset.day}"]`);
     if (inputs.length) inputs[inputs.length - 1].focus();
   }
   else if (a === 'plan-del-ex') {
-    const day = state.program.days[btn.dataset.day];
+    const day = planDays()[btn.dataset.day];
     day.exercises.splice(+btn.dataset.idx, 1);
     save(); render();
   }
@@ -1214,7 +1299,7 @@ document.addEventListener('input', e => {
       waterPush();
       return;
     }
-    const day = state.program.days[el.dataset.day];
+    const day = planDays()[el.dataset.day];
     if (!day) return;
     if (f === 'dayname') day.name = el.value;
     else {
