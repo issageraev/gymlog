@@ -252,12 +252,115 @@ const view = $('#view');
 /* scrollTop=true только при смене экрана; точечные обновления
    (галочки подходов, +250 мл и т.п.) сохраняют позицию прокрутки */
 function render(scrollTop = false) {
+  if (!state.settings.onboarded) { renderOnboard(); window.scrollTo(0, 0); return; }
+  document.body.classList.remove('onboarding');
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === ui.view));
   if (ui.view === 'calendar') renderCalendar();
   else if (ui.view === 'week') renderWeek();
   else if (ui.view === 'stats') renderStats();
   else if (ui.view === 'plan') renderPlan();
   if (scrollTop) window.scrollTo(0, 0);
+}
+
+/* ===== Онбординг ===== */
+function obDots(step) {
+  return `<div class="ob-dots">${[0, 1, 2].map(i => `<i class="${i === step ? 'on' : ''}"></i>`).join('')}</div>`;
+}
+
+function renderOnboard() {
+  document.body.classList.add('onboarding');
+  if (!ui.obInit) {
+    ui.obInit = true;
+    ui.obStep = 0;
+    ui.obDays = new Set(Object.keys(state.program.days).length ? Object.keys(state.program.days) : ['1', '3', '5']);
+    ui.obTpl = 'split';
+  }
+  const step = ui.obStep;
+
+  if (step === 0) {
+    view.innerHTML = `
+      <div class="ob">
+        <svg class="ob-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/></svg>
+        <h1>GymLog</h1>
+        <p class="ob-lead">Дневник тренировок прямо в Telegram</p>
+        <ul class="ob-list">
+          <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 9h18"/></svg><span>Недельный план и календарь тренировок</span></li>
+          <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg><span>Веса и повторы — с подсказками прошлого раза</span></li>
+          <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/></svg><span>Графики прогресса и личные рекорды</span></li>
+          <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7 5.6 9a9 9 0 1 0 12.8 0z"/></svg><span>Вода — кольцо на главном и запись через бота</span></li>
+        </ul>
+        ${obDots(0)}
+        <div class="ob-footer">
+          <button class="btn btn-primary btn-block" data-action="ob-next">Настроить под себя</button>
+          <button class="btn btn-ghost btn-block" data-action="ob-skip">Пропустить — всё по умолчанию</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (step === 1) {
+    const fresh = Object.keys(state.logs).length === 0;
+    view.innerHTML = `
+      <div class="ob">
+        <h1 style="font-size:26px">Дни тренировок</h1>
+        <p class="ob-lead">Отметь, в какие дни ходишь в зал</p>
+        <div class="ob-days">
+          ${DAYS_SHORT.map((d, i) => {
+            const k = String(i + 1);
+            return `<button class="ob-day ${ui.obDays.has(k) ? 'on' : ''}" data-action="ob-day" data-day="${k}" aria-pressed="${ui.obDays.has(k)}">${d}</button>`;
+          }).join('')}
+        </div>
+        <div class="ob-tpl">
+          <button class="ob-tpl-card ${ui.obTpl === 'split' ? 'on' : ''}" data-action="ob-tpl" data-tpl="split">
+            <b>Готовый сплит</b>
+            <span>Грудь+трицепс · Спина+бицепс · Ноги+плечи. Всё можно менять.</span>
+          </button>
+          <button class="ob-tpl-card ${ui.obTpl === 'empty' ? 'on' : ''}" data-action="ob-tpl" data-tpl="empty">
+            <b>Пустой план</b>
+            <span>Соберу программу сам, с нуля.</span>
+          </button>
+        </div>
+        ${fresh ? '' : '<p class="ex-meta">У тебя уже есть история — существующие дни плана останутся как есть, изменятся только добавленные и убранные.</p>'}
+        ${obDots(1)}
+        <div class="ob-footer">
+          <button class="btn btn-primary btn-block" data-action="ob-next" ${ui.obDays.size ? '' : 'disabled'}>Дальше</button>
+          <button class="btn btn-ghost btn-block" data-action="ob-back">Назад</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  view.innerHTML = `
+    <div class="ob">
+      <h1 style="font-size:26px">Почти готово</h1>
+      <p class="ob-lead">Дневная норма воды, мл</p>
+      <input id="ob-water" class="num-input" style="width:140px;min-height:52px;font-size:20px;margin:0 auto 20px" type="number" inputmode="numeric" min="500" max="6000" step="100" value="${state.settings.waterGoal || 2000}">
+      <ul class="ob-list">
+        <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7"/></svg><span>Галочка у подхода записывает его и запускает таймер отдыха</span></li>
+        <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/></svg><span>Тренировку можно начать в любой день — даже вне плана</span></li>
+        <li><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.4 8.4 8.5 8.5 0 0 1-3.8-.9L3 21l2-5.8a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.4 8.38 8.38 0 0 1 8.4 8.5z"/></svg><span>Боту можно писать «+500» или «выпил стакан воды» — вода запишется сама</span></li>
+      </ul>
+      ${obDots(2)}
+      <div class="ob-footer">
+        <button class="btn btn-primary btn-block" data-action="ob-finish">Поехали!</button>
+        <button class="btn btn-ghost btn-block" data-action="ob-back">Назад</button>
+      </div>
+    </div>`;
+}
+
+function applyOnboard() {
+  const fresh = Object.keys(state.logs).length === 0;
+  const tplArr = Object.values(defaultProgram().days);
+  const days = [...ui.obDays].sort();
+  for (const k of Object.keys(state.program.days)) {
+    if (!ui.obDays.has(k)) delete state.program.days[k];
+  }
+  days.forEach((k, i) => {
+    const make = () => ui.obTpl === 'empty'
+      ? { name: 'Тренировка', exercises: [] }
+      : JSON.parse(JSON.stringify(tplArr[i % tplArr.length]));
+    if (!state.program.days[k] || fresh) state.program.days[k] = make();
+  });
 }
 
 /* ===== Календарь ===== */
@@ -848,6 +951,10 @@ function renderPlan() {
         </div>
       </div>
       <div class="settings-row">
+        <label>Вводный тур<span class="hint">Пройти настройку заново</span></label>
+        <button class="btn btn-outline btn-sm" data-action="ob-restart">Открыть</button>
+      </div>
+      <div class="settings-row">
         <label>Сброс<span class="hint">Удалить все данные без возврата</span></label>
         <button class="btn btn-outline btn-sm btn-danger" data-action="reset">Сбросить</button>
       </div>
@@ -907,7 +1014,35 @@ document.addEventListener('click', e => {
   if (!btn) return;
   const a = btn.dataset.action;
 
-  if (a === 'nav') { ui.view = btn.dataset.view; render(true); }
+  if (a === 'ob-next') { ui.obStep++; render(); }
+  else if (a === 'ob-back') { ui.obStep--; render(); }
+  else if (a === 'ob-day') {
+    const k = btn.dataset.day;
+    if (ui.obDays.has(k)) ui.obDays.delete(k); else ui.obDays.add(k);
+    render();
+  }
+  else if (a === 'ob-tpl') { ui.obTpl = btn.dataset.tpl; render(); }
+  else if (a === 'ob-skip' || a === 'ob-finish') {
+    if (a === 'ob-finish') {
+      applyOnboard();
+      const w = +($('#ob-water')?.value) || 2000;
+      state.settings.waterGoal = Math.max(500, Math.min(6000, w));
+      waterPush();
+    }
+    state.settings.onboarded = true;
+    ui.obInit = false;
+    save();
+    haptic('success');
+    ui.view = 'calendar';
+    render(true);
+    toast('Готово — хорошей тренировки!', 'green');
+  }
+  else if (a === 'ob-restart') {
+    state.settings.onboarded = false; // не сохраняем: тур снова покажется только сейчас
+    ui.obInit = false;
+    render(true);
+  }
+  else if (a === 'nav') { ui.view = btn.dataset.view; render(true); }
   else if (a === 'cal-prev' || a === 'cal-next') {
     ui.calMonth += a === 'cal-next' ? 1 : -1;
     if (ui.calMonth < 0) { ui.calMonth = 11; ui.calYear--; }
