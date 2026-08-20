@@ -10,6 +10,20 @@ if (tg) {
     tg.setHeaderColor('#0C0F14');
     tg.setBackgroundColor('#0C0F14');
   } catch (e) { /* старые клиенты */ }
+  try { tg.disableVerticalSwipes(); } catch (e) { /* до Bot API 7.7 */ }
+}
+
+/* Подтверждение: нативный confirm() в Telegram на iOS может не показываться —
+   используем tg.showConfirm, где доступен */
+function ask(msg, onOk, onCancel) {
+  if (tg && tg.showConfirm) {
+    try {
+      tg.showConfirm(msg, ok => { if (ok) onOk(); else if (onCancel) onCancel(); });
+      return;
+    } catch (e) { /* версия < 6.2 */ }
+  }
+  if (confirm(msg)) onOk();
+  else if (onCancel) onCancel();
 }
 function haptic(kind) {
   try {
@@ -464,20 +478,26 @@ function renderWorkoutArea(dateStr) {
 
   if (!log) {
     if (planDay) {
+      const hasEx = planDay.exercises.length > 0;
       return `
         <div class="card">
           <div class="workout-head">
             <h2>${esc(planDay.name)}</h2>
-            <span class="date">По плану: ${planDay.exercises.length} ${plural(planDay.exercises.length, 'упражнение', 'упражнения', 'упражнений')}</span>
+            <span class="date">${hasEx ? `По плану: ${planDay.exercises.length} ${plural(planDay.exercises.length, 'упражнение', 'упражнения', 'упражнений')}` : 'План этого дня пока пуст'}</span>
           </div>
           ${planDay.exercises.map(ex => `
             <div class="ex-meta" style="margin:6px 0">
               <b style="color:var(--text)">${esc(ex.name)}</b> — ${ex.sets}×${ex.reps}
               ${hintLast(ex.id, dateStr)}
             </div>`).join('')}
-          <button class="btn btn-primary btn-block" data-action="start-workout" data-date="${dateStr}" data-daykey="${wd}" style="margin-top:10px">
-            Начать тренировку
-          </button>
+          ${hasEx
+            ? `<button class="btn btn-primary btn-block" data-action="start-workout" data-date="${dateStr}" data-daykey="${wd}" style="margin-top:10px">Начать тренировку</button>`
+            : `<p class="ex-meta">Добавь упражнения — и здесь появится кнопка старта.</p>
+               <button class="btn btn-primary btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:6px">Заполнить план</button>`}
+          ${hasEx ? `<button class="btn btn-outline btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:8px">
+            <svg class="icon" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>
+            Изменить план этой тренировки
+          </button>` : ''}
         </div>`;
     }
     // День отдыха
@@ -492,6 +512,7 @@ function renderWorkoutArea(dateStr) {
           <p style="font-size:14px">Восстановление — тоже часть прогресса.</p>
         </div>
         ${options ? `<p class="ex-meta" style="text-align:center">Или внеплановая тренировка:</p><div class="rest-choice">${options}</div>` : ''}
+        <button class="btn btn-ghost btn-block" data-action="edit-plan" data-day="${wd}" style="margin-top:10px">Настроить план недели</button>
       </div>`;
   }
 
@@ -769,7 +790,7 @@ function renderPlan() {
     const key = String(i + 1);
     const day = state.program.days[key];
     if (!day) {
-      return `<div class="card plan-day">
+      return `<div class="card plan-day" id="plan-day-${key}">
         <div class="plan-day-head">
           <h3 class="off">${full} — отдых</h3>
           <label class="switch" aria-label="Тренировка в ${full.toLowerCase()}">
@@ -787,7 +808,7 @@ function renderPlan() {
           <svg class="icon" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
         </button>
       </div>`).join('');
-    return `<div class="card plan-day">
+    return `<div class="card plan-day" id="plan-day-${key}">
       <div class="plan-day-head">
         <h3>${full}</h3>
         <label class="switch" aria-label="Тренировка в ${full.toLowerCase()}">
@@ -949,24 +970,33 @@ document.addEventListener('click', e => {
     if (log) { log.completed = false; save(); render(); }
   }
   else if (a === 'delete-workout') {
-    if (confirm('Удалить эту тренировку и все её данные?')) {
+    ask('Удалить эту тренировку и все её данные?', () => {
       delete state.logs[btn.dataset.date];
       stopRest();
       save(); render();
+    });
+  }
+  else if (a === 'edit-plan') {
+    ui.view = 'plan';
+    render(true);
+    const card = document.getElementById('plan-day-' + (btn.dataset.day || '1'));
+    if (card) {
+      card.scrollIntoView({ block: 'start' });
+      card.classList.add('focus');
+      setTimeout(() => card.classList.remove('focus'), 2500);
     }
   }
   else if (a === 'plan-toggle') {
     const key = btn.dataset.day;
     if (state.program.days[key]) {
-      if (state.program.days[key].exercises.length &&
-          !confirm(`Убрать тренировку в этот день? Упражнения из плана удалятся (история останется).`)) {
-        render(); return;
-      }
-      delete state.program.days[key];
+      const doOff = () => { delete state.program.days[key]; save(); render(); };
+      if (state.program.days[key].exercises.length) {
+        ask('Убрать тренировку в этот день? Упражнения из плана удалятся, история останется.', doOff, () => render());
+      } else doOff();
     } else {
       state.program.days[key] = { name: 'Тренировка', exercises: [] };
+      save(); render();
     }
-    save(); render();
   }
   else if (a === 'plan-add-ex') {
     const day = state.program.days[btn.dataset.day];
@@ -1013,11 +1043,11 @@ document.addEventListener('click', e => {
   else if (a === 'export') exportData();
   else if (a === 'import') $('#import-file').click();
   else if (a === 'reset') {
-    if (confirm('Точно удалить ВСЕ данные: план, историю, рекорды?')) {
-      state = { program: defaultProgram(), logs: {}, settings: { restSec: 90 } };
+    ask('Точно удалить ВСЕ данные: план, историю, рекорды?', () => {
+      state = { program: defaultProgram(), logs: {}, body: {}, water: {}, settings: { restSec: 90, waterGoal: 2000 } };
       save(); render();
       toast('Данные сброшены');
-    }
+    });
   }
   else if (a === 'rest-plus') { restUntil += 30000; tickRest(); }
   else if (a === 'rest-stop') stopRest();
@@ -1093,7 +1123,7 @@ $('#import-file').addEventListener('change', e => {
 const hadLocal = load();
 render();
 if (!hadLocal && tg) {
-  cloudLoad(ok => { if (ok) { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} render(); } });
+  cloudLoad(ok => { if (ok) { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} render(); waterSyncAt = 0; waterSync(true); } });
 }
 waterSync(true);
 window.addEventListener('focus', () => waterSync());

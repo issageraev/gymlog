@@ -240,7 +240,8 @@ svg.icon{width:22px;height:22px;flex:none}
 .pr-item .val{font-family:'Oswald','Inter',sans-serif;font-size:20px;font-weight:700;color:var(--primary)}
 
 /* ---------- План ---------- */
-.plan-day{margin-bottom:12px}
+.plan-day{margin-bottom:12px;scroll-margin-top:12px;transition:border-color .4s, box-shadow .4s}
+.plan-day.focus{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary), 0 0 18px rgba(249,115,22,.25)}
 .plan-day-head{display:flex;align-items:center;gap:12px;min-height:44px}
 .plan-day-head h3{flex:1;font-size:18px}
 .plan-day-head .off{color:var(--muted);font-weight:400;font-size:14px}
