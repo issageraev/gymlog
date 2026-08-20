@@ -494,10 +494,9 @@ async function waterSync(force) {
   } catch (e) {}
 }
 
-function waterPush() {
+function waterPush(t = todayISO()) {
   const auth = tgAuth();
   if (!auth) return;
-  const t = todayISO();
   fetch(WATER_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: auth },
@@ -521,19 +520,20 @@ function waterRing(pct) {
   </svg>`;
 }
 
-function renderWaterCard() {
-  const ml = waterToday();
+function renderWaterCard(dateStr = todayISO()) {
+  const ml = (state.water || {})[dateStr] || 0;
   const goal = state.settings.waterGoal || 2000;
+  const isToday = dateStr === todayISO();
   return `
     <div class="card water-card">
       ${waterRing(ml / goal)}
       <div class="water-info">
-        <h3>Вода сегодня</h3>
+        <h3>${isToday ? 'Вода сегодня' : 'Вода · ' + fmtShort(dateStr)}</h3>
         <p class="water-amt"><b>${fmtMl(ml)}</b> из ${fmtMl(goal)}${ml >= goal ? ' · <span style="color:var(--water)">норма выполнена</span>' : ''}</p>
         <div class="water-btns">
-          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="250">+250 мл</button>
-          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="500">+500 мл</button>
-          <button class="btn btn-ghost btn-sm" data-action="water-add" data-ml="-250" ${ml ? '' : 'disabled'} aria-label="Убрать 250 мл">−250</button>
+          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="250" data-date="${dateStr}">+250 мл</button>
+          <button class="btn btn-outline btn-sm" data-action="water-add" data-ml="500" data-date="${dateStr}">+500 мл</button>
+          <button class="btn btn-ghost btn-sm" data-action="water-add" data-ml="-250" data-date="${dateStr}" ${ml ? '' : 'disabled'} aria-label="Убрать 250 мл">−250</button>
         </div>
       </div>
     </div>`;
@@ -605,7 +605,8 @@ function renderWeek() {
     <h1 class="screen-title">Тренировка</h1>
     <p class="screen-sub">${sel === today ? 'Сегодня — ' : ''}${fmtHuman(sel)}${state.program.mode === 'ab' ? ` · <span style="color:var(--primary);font-weight:600">неделя ${weekType(sel)}</span>` : ''}</p>
     <div class="week-strip">${strip}</div>
-    <div id="workout-area">${renderWorkoutArea(sel)}</div>`;
+    <div id="workout-area">${renderWorkoutArea(sel)}</div>
+    ${sel <= today ? renderWaterCard(sel) : ''}`;
 }
 
 function renderWorkoutArea(dateStr) {
@@ -695,6 +696,11 @@ function renderWorkoutArea(dateStr) {
       <span class="date">${sets} ${plural(sets, 'подход', 'подхода', 'подходов')} · ${fmtTon(ton)}</span>
     </div>
     ${exCards}
+    <div class="card">
+      <h3 style="font-size:16px;margin-bottom:8px">Заметка</h3>
+      <textarea class="note-input" data-wfield="note" rows="3"
+        placeholder="Самочувствие, темп, что учесть в следующий раз…">${esc(log.note || '')}</textarea>
+    </div>
     ${log.completed
       ? `<button class="btn btn-outline btn-block" data-action="reopen-workout" data-date="${dateStr}">Возобновить тренировку</button>`
       : `<button class="btn btn-primary btn-block" data-action="finish-workout" data-date="${dateStr}">Завершить тренировку</button>`}
@@ -1233,13 +1239,13 @@ document.addEventListener('click', e => {
   else if (a === 'water-add') {
     if (!state.water) state.water = {};
     const goal = state.settings.waterGoal || 2000;
-    const t = todayISO();
+    const t = btn.dataset.date || todayISO();
     const before = state.water[t] || 0;
     state.water[t] = Math.max(0, Math.min(10000, before + +btn.dataset.ml));
     save();
-    waterPush();
+    waterPush(t);
     haptic();
-    if (before < goal && state.water[t] >= goal) {
+    if (t === todayISO() && before < goal && state.water[t] >= goal) {
       toast('Дневная норма воды выполнена!', 'green');
       haptic('success');
     }
@@ -1260,7 +1266,20 @@ document.addEventListener('click', e => {
     delete state.body[btn.dataset.date];
     save(); render();
   }
-  else if (a === 'export') exportData();
+  else if (a === 'export') {
+    const auth = tgAuth();
+    if (auth) {
+      toast('Отправляю копию в чат с ботом…');
+      fetch('https://gymlog-bot.vercel.app/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: auth },
+        body: JSON.stringify(state)
+      }).then(r => {
+        if (r.ok) { toast('Резервная копия отправлена в чат с ботом', 'green'); haptic('success'); }
+        else toast('Не получилось отправить — попробуй позже');
+      }).catch(() => toast('Не получилось отправить — попробуй позже'));
+    } else exportData();
+  }
   else if (a === 'import') $('#import-file').click();
   else if (a === 'reset') {
     ask('Точно удалить ВСЕ данные: план, историю, рекорды?', () => {
@@ -1275,6 +1294,12 @@ document.addEventListener('click', e => {
 
 document.addEventListener('input', e => {
   const el = e.target;
+  // Заметка к тренировке
+  if (el.dataset.wfield === 'note') {
+    const log = getLog(ui.weekDate);
+    if (log) { log.note = el.value.slice(0, 2000); save(); }
+    return;
+  }
   // Ввод веса/повторов
   if (el.dataset.field) {
     const log = getLog(ui.weekDate);
