@@ -235,13 +235,15 @@ function logTonnage(log) {
 /* ---------- Рендеринг ---------- */
 const view = $('#view');
 
-function render() {
+/* scrollTop=true только при смене экрана; точечные обновления
+   (галочки подходов, +250 мл и т.п.) сохраняют позицию прокрутки */
+function render(scrollTop = false) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === ui.view));
   if (ui.view === 'calendar') renderCalendar();
   else if (ui.view === 'week') renderWeek();
   else if (ui.view === 'stats') renderStats();
   else if (ui.view === 'plan') renderPlan();
-  window.scrollTo(0, 0);
+  if (scrollTop) window.scrollTo(0, 0);
 }
 
 /* ===== Календарь ===== */
@@ -884,15 +886,15 @@ document.addEventListener('click', e => {
   if (!btn) return;
   const a = btn.dataset.action;
 
-  if (a === 'nav') { ui.view = btn.dataset.view; render(); }
+  if (a === 'nav') { ui.view = btn.dataset.view; render(true); }
   else if (a === 'cal-prev' || a === 'cal-next') {
     ui.calMonth += a === 'cal-next' ? 1 : -1;
     if (ui.calMonth < 0) { ui.calMonth = 11; ui.calYear--; }
     if (ui.calMonth > 11) { ui.calMonth = 0; ui.calYear++; }
     render();
   }
-  else if (a === 'open-day') { ui.weekDate = btn.dataset.date; ui.view = 'week'; render(); }
-  else if (a === 'week-day') { ui.weekDate = btn.dataset.date; render(); }
+  else if (a === 'open-day') { ui.weekDate = btn.dataset.date; ui.view = 'week'; render(true); }
+  else if (a === 'week-day') { ui.weekDate = btn.dataset.date; render(true); }
   else if (a === 'start-workout') {
     createLog(btn.dataset.date, btn.dataset.daykey);
     haptic();
